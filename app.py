@@ -10,9 +10,9 @@ st.set_page_config(page_title="Experiment Analysis Assistant", layout="wide")
 with st.sidebar:
     st.title("Experiment Setup")
 
-    exp_id = st.text_input("Experiment ID", value="135181")
-    treatment_id = st.text_input("Treatment ID", value="303266")
-    control_id = st.text_input("Control ID", value="303267")
+    exp_id = st.text_input("Experiment ID", placeholder="e.g. 135181")
+    treatment_id = st.text_input("Treatment ID", placeholder="e.g. 303266")
+    control_id = st.text_input("Control ID", placeholder="e.g. 303267")
 
     st.divider()
     st.subheader("Analysis Options")
@@ -44,6 +44,9 @@ st.title("Experiment Analysis Assistant")
 st.caption("Prototype — data sourced from local CSVs (swap `data_loader.py` for live Snowflake query)")
 
 if run_btn:
+    if not exp_id or not treatment_id or not control_id:
+        st.warning("Please enter Experiment ID, Treatment ID, and Control ID before running.")
+        st.stop()
     if not selected_metrics:
         st.warning("Select at least one metric.")
         st.stop()
