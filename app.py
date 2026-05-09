@@ -69,15 +69,18 @@ if run_btn:
                     "Lift": res["Lift"],
                     "95% CI": res["95% CI"],
                     "p-value": res["p-value"],
+                    "Interpretation": res["Interpretation"],
                     "_diff": res["_diff"],
                     "_p": res["_p"],
+                    "_interp_color": res["_interp_color"],
+                    "_reasoning": res["_reasoning"],
                 })
 
             # Segments
             for cut_label in selected_cuts:
                 seg_col = SEGMENT_REGISTRY[cut_label]
-                seg_df = run_segment(df, cfg["column"], seg_col, min_sellers, cfg["fmt"], n_boot=n_boot)
-                segment_results.setdefault(cut_label, {})[metric_label] = seg_df
+                seg_df, seg_reasoning = run_segment(df, cfg["column"], seg_col, min_sellers, cfg["fmt"], n_boot=n_boot)
+                segment_results.setdefault(cut_label, {})[metric_label] = (seg_df, seg_reasoning)
 
     st.session_state["overall_rows"] = overall_rows
     st.session_state["segment_results"] = segment_results
@@ -122,22 +125,17 @@ if not overall_rows:
 else:
     import pandas as pd
 
-    display_cols = ["Metric", "Type", "Control Mean", "Treatment Mean", "Lift", "95% CI", "p-value"]
-    overall_df = pd.DataFrame(overall_rows)[display_cols + ["_diff", "_p"]]
+    display_cols = ["Metric", "Type", "Control Mean", "Treatment Mean", "Lift", "95% CI", "p-value", "Interpretation"]
+    overall_df = pd.DataFrame(overall_rows)[display_cols + ["_diff", "_p", "_interp_color"]]
 
     def color_overall(row):
-        styles = [""] * len(display_cols)
-        idx = display_cols.index
-
-        lift_i = idx("Lift")
-        p_i = idx("p-value")
-
         diff = row["_diff"]
         p = row["_p"]
-
+        interp_color = row["_interp_color"]
         row_styles = {col: "" for col in display_cols}
         row_styles["Lift"] = "background-color: #d0f0d0" if diff > 0 else "background-color: #f8d0d0" if diff < 0 else ""
         row_styles["p-value"] = "background-color: #ffd27f" if p < 0.05 else ""
+        row_styles["Interpretation"] = f"background-color: {interp_color}"
         return [row_styles[col] for col in display_cols]
 
     styled_overall = (
@@ -153,6 +151,12 @@ else:
     )
     st.write(styled_overall.to_html(), unsafe_allow_html=True)
 
+    with st.expander("Reasoning — why these verdicts?", expanded=False):
+        for row in overall_rows:
+            st.markdown(f"**{row['Metric']}** — *{row['Interpretation']}*")
+            st.markdown(row["_reasoning"])
+            st.divider()
+
 st.divider()
 
 # ── Segmented Results ─────────────────────────────────────────────────────────
@@ -167,12 +171,17 @@ else:
     for tab, cut_label in zip(tabs, segment_results.keys()):
         with tab:
             metric_data = segment_results[cut_label]
-            any_result = False
-            for metric_label, seg_df in metric_data.items():
+            for metric_label, (seg_df, seg_reasoning) in metric_data.items():
                 with st.expander(metric_label, expanded=True):
                     if seg_df is None:
                         st.warning(f"No segments met the minimum of {cfg['min_sellers']} sellers per arm.")
                     else:
-                        any_result = True
                         styled = style_table(seg_df)
                         st.write(styled.to_html(), unsafe_allow_html=True)
+
+                        if seg_reasoning:
+                            with st.expander("Reasoning per segment", expanded=False):
+                                for seg_val, reason in seg_reasoning.items():
+                                    st.markdown(f"**{seg_val}**")
+                                    st.markdown(reason)
+                                    st.divider()

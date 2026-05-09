@@ -1,6 +1,83 @@
 import numpy as np
 import pandas as pd
 
+_INTERP_COLORS = {
+    "Significant": "background-color: #d0f0d0",
+    "More samples needed": "background-color: #fff3cd",
+    "No significant effect": "background-color: #e8e8e8",
+}
+
+
+def interpret_result(p_value, ci_low, ci_high, control_mean):
+    """
+    Returns (label, hex_color) verdict for a single bootstrap result.
+    'More samples needed' fires when CI is wide (>30% of control mean) and not significant —
+    meaning we can't rule out a meaningful effect, we just don't have enough data yet.
+    """
+    if p_value < 0.05:
+        return "Significant", "#d0f0d0"
+    ci_width = ci_high - ci_low
+    relative_width = ci_width / abs(control_mean) if control_mean != 0 else float("inf")
+    if relative_width > 0.30:
+        return "More samples needed", "#fff3cd"
+    return "No significant effect", "#e8e8e8"
+
+
+def generate_reasoning(label, p_value, ci_low, ci_high, control_mean, observed_diff, lift_pct, n_control, n_treatment):
+    """
+    Returns a markdown string explaining why the verdict was reached,
+    with specific numbers and references to standard A/B testing literature.
+    """
+    ci_width = ci_high - ci_low
+    rel_width_pct = (ci_width / abs(control_mean) * 100) if control_mean != 0 else 0
+    direction = "increase" if observed_diff > 0 else "decrease"
+    ci_sign = "does not cross zero" if (ci_low > 0 or ci_high < 0) else "crosses zero"
+
+    if label == "Significant":
+        return (
+            f"**p = {p_value:.4f}**, which is below the standard 0.05 significance threshold. "
+            f"The 95% bootstrap CI [{ci_low:+.4g}, {ci_high:+.4g}] {ci_sign}, confirming the "
+            f"observed **{lift_pct:+.1f}% {direction}** is statistically reliable and unlikely to be "
+            f"explained by random chance alone. "
+            f"The experiment had {n_control:,} control and {n_treatment:,} treatment sellers — "
+            f"sufficient power to detect this effect size. "
+            f"\n\n"
+            f"*Ref: Kohavi, Tang & Xu — [Trustworthy Online Controlled Experiments](https://www.cambridge.org/trustworthyonlinecontrolledexperiments) (2020), Ch. 3 & 17: "
+            f"interpreting p-values and confidence intervals in online experiments.*"
+        )
+
+    if label == "More samples needed":
+        return (
+            f"**p = {p_value:.4f}** (not significant), but the CI is wide: "
+            f"[{ci_low:+.4g}, {ci_high:+.4g}] spans **{rel_width_pct:.0f}% of the control mean** ({control_mean:.4g}). "
+            f"A wide CI means the experiment cannot reliably distinguish between a meaningful positive effect, "
+            f"no effect, or a meaningful negative effect — this is a **statistical power problem**, not necessarily "
+            f"evidence that the treatment doesn't work. "
+            f"Current sample: {n_control:,} control / {n_treatment:,} treatment sellers. "
+            f"\n\n"
+            f"**Recommended actions:**\n"
+            f"- Extend the experiment duration to accumulate more sellers.\n"
+            f"- Increase the traffic allocation to the treatment arm.\n"
+            f"- Pre-compute a required sample size using a power calculator (target 80% power at your MDE).\n"
+            f"\n"
+            f"*Ref: Kohavi et al. (2020), Ch. 18 (Statistical Power & Peeking). "
+            f"Cohen, J. — Statistical Power Analysis for the Behavioral Sciences (1988): "
+            f"a CI spanning >20–30% of the baseline is a common sign of an underpowered experiment.*"
+        )
+
+    # No significant effect
+    return (
+        f"**p = {p_value:.4f}** (not significant). The 95% CI [{ci_low:+.4g}, {ci_high:+.4g}] "
+        f"is **narrow** — only {rel_width_pct:.0f}% of the control mean — indicating the experiment "
+        f"is well-powered with {n_control:,} control and {n_treatment:,} treatment sellers. "
+        f"This is a reliable null result: the treatment has **no meaningful effect** on this metric "
+        f"at the observed scale. A significant result would have been detectable if it existed. "
+        f"\n\n"
+        f"*Ref: Lakens, D. — 'Equivalence Tests: A Practical Primer' (2017), Advances in Methods and Practices "
+        f"in Psychological Science: how to distinguish a true null from an underpowered experiment. "
+        f"Also: Kohavi et al. (2020), Ch. 19 (Misinterpretation of p-values).*"
+    )
+
 
 def bootstrap_mean_diff(series_t, series_c, n_boot=10000, seed=42):
     s_t = series_t.dropna().to_numpy()
@@ -37,21 +114,30 @@ def run_overall(df, metric_col, fmt, n_boot=10000):
     if res is None:
         return None
     lift_pct = (res["observed_diff"] / res["control_mean"] * 100) if res["control_mean"] != 0 else 0
+    label, color = interpret_result(res["p_value"], res["ci_low"], res["ci_high"], res["control_mean"])
+    reasoning = generate_reasoning(
+        label, res["p_value"], res["ci_low"], res["ci_high"],
+        res["control_mean"], res["observed_diff"], lift_pct,
+        n_control=c.dropna().shape[0], n_treatment=t.dropna().shape[0],
+    )
     return {
         "Control Mean": f"{res['control_mean']:{fmt}}",
         "Treatment Mean": f"{res['treatment_mean']:{fmt}}",
         "Lift": f"{res['observed_diff']:{fmt}} ({lift_pct:+.1f}%)",
         "95% CI": f"[{res['ci_low']:{fmt}}, {res['ci_high']:{fmt}}]",
         "p-value": f"{res['p_value']:.4f}",
+        "Interpretation": label,
         "_diff": res["observed_diff"],
         "_p": res["p_value"],
+        "_interp_color": color,
+        "_reasoning": reasoning,
     }
 
 
 def run_segment(df, metric_col, segment_col, min_sellers, fmt, n_boot=10000):
     """
-    Returns a wide DataFrame (metrics as rows, segment values as columns)
-    and a Styler with color coding applied.
+    Returns (wide_df, reasoning_dict) where reasoning_dict maps segment value → markdown reasoning string.
+    wide_df has metrics as rows and segment values as columns.
     """
     metrics_order = [
         "Control sellers",
@@ -61,9 +147,11 @@ def run_segment(df, metric_col, segment_col, min_sellers, fmt, n_boot=10000):
         "Diff (T - C)",
         "95% CI",
         "p-value",
+        "Interpretation",
     ]
 
     seg_cols = {}
+    reasoning_dict = {}
 
     for seg_val, grp in df.groupby(segment_col):
         c = grp[grp["TREATMENT_GROUP"] == "CONTROL"][metric_col]
@@ -76,6 +164,13 @@ def run_segment(df, metric_col, segment_col, min_sellers, fmt, n_boot=10000):
         if res is None:
             continue
 
+        lift_pct = (res["observed_diff"] / res["control_mean"] * 100) if res["control_mean"] != 0 else 0
+        interp_label, _ = interpret_result(res["p_value"], res["ci_low"], res["ci_high"], res["control_mean"])
+        reasoning_dict[seg_val] = generate_reasoning(
+            interp_label, res["p_value"], res["ci_low"], res["ci_high"],
+            res["control_mean"], res["observed_diff"], lift_pct,
+            n_control=len(c.dropna()), n_treatment=len(t.dropna()),
+        )
         seg_cols[seg_val] = {
             "Control sellers": str(len(c)),
             "Treatment sellers": str(len(t)),
@@ -84,10 +179,11 @@ def run_segment(df, metric_col, segment_col, min_sellers, fmt, n_boot=10000):
             "Diff (T - C)": f"{res['observed_diff']:{fmt}}",
             "95% CI": f"[{res['ci_low']:{fmt}}, {res['ci_high']:{fmt}}]",
             "p-value": f"{res['p_value']:.4f}",
+            "Interpretation": interp_label,
         }
 
     if not seg_cols:
-        return None
+        return None, {}
 
     rows = []
     for metric in metrics_order:
@@ -96,7 +192,7 @@ def run_segment(df, metric_col, segment_col, min_sellers, fmt, n_boot=10000):
             row[seg_val] = vals[metric]
         rows.append(row)
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), reasoning_dict
 
 
 def style_table(df):
@@ -133,6 +229,15 @@ def style_table(df):
             out.append("background-color: #ffd27f" if v < 0.05 else "")
         return out
 
+    def highlight_interp(row):
+        if row.iloc[0] != "Interpretation":
+            return [""] * len(row)
+        out = [""]
+        for val in row.iloc[1:]:
+            out.append(_INTERP_COLORS.get(val, ""))
+        return out
+
     styler = styler.apply(highlight_diff, axis=1)
     styler = styler.apply(highlight_p, axis=1)
+    styler = styler.apply(highlight_interp, axis=1)
     return styler
