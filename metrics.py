@@ -31,6 +31,12 @@ METRIC_REGISTRY = {
         "type": "count",
         "fmt": ".2f",
     },
+    "Qty per Listing": {
+        "column": "qty_per_listing",
+        "source": "listings",
+        "type": "continuous",
+        "fmt": ".4f",
+    },
 }
 
 SEGMENT_REGISTRY = {
@@ -45,4 +51,6 @@ def build_derived_columns(lstg_df):
     df["conv_7d"] = df["LISTINGS_CONV_7D"] / df["LISTINGS_CNT"].replace(0, np.nan)
     df["conv_14d"] = df["LISTINGS_CONV_14D"] / df["LISTINGS_CNT"].replace(0, np.nan)
     df["listings_per_seller"] = df["LISTINGS_CNT"]
+    if "QTY_TOTAL" in df.columns:
+        df["qty_per_listing"] = df["QTY_TOTAL"] / df["LISTINGS_CNT"].replace(0, np.nan)
     return df

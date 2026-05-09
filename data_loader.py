@@ -17,5 +17,11 @@ def load_experiment_data(experiment_id: str, treatment_id: str, control_id: str)
     """
     main_df = pd.read_csv(_DATA_DIR / "seller_results.csv")
     listings_df = pd.read_csv(_DATA_DIR / "seller_results1.csv")
+
+    # Merge QTY_TOTAL into listings_df so qty_per_listing can be computed.
+    # In production (Snowflake), both columns will come from one query and this merge is not needed.
+    listings_df = listings_df.merge(
+        main_df[["USER_ID", "QTY_TOTAL"]], on="USER_ID", how="left"
+    )
     listings_df = build_derived_columns(listings_df)
     return main_df, listings_df
