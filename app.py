@@ -20,19 +20,19 @@ with st.sidebar:
     selected_metrics = st.multiselect(
         "Metrics to analyze",
         options=list(METRIC_REGISTRY.keys()),
-        default=list(METRIC_REGISTRY.keys()),
+        default=[],
     )
 
     selected_cuts = st.multiselect(
         "Segment cuts",
         options=list(SEGMENT_REGISTRY.keys()),
-        default=list(SEGMENT_REGISTRY.keys()),
+        default=[],
     )
 
     min_sellers = st.slider("Min sellers per arm", min_value=10, max_value=100, value=20, step=5)
     n_boot = st.select_slider(
         "Bootstrap samples",
-        options=[1000, 2000, 5000, 10000, 20000],
+        options=[5000, 10000, 20000],
         value=10000,
     )
 
